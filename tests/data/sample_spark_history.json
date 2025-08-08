@@ -1,0 +1,28 @@
+{"Event":"SparkListenerApplicationStart","App Name":"Complex Spark Analytics","App ID":"app-20250808","Timestamp":1627984800000}
+{"Event":"SparkListenerEnvironmentUpdate","JVM Information":[{"name":"java.version","value":"11.0.12"}],"Spark Properties":[{"name":"spark.executor.memory","value":"4g"},{"name":"spark.executor.cores","value":"2"}]}
+{"Event":"SparkListenerJobStart","Job ID":0,"Submission Time":1627984801000,"Stage IDs":[0,1],"Properties":{"callSite.short":"collect at Main.scala:88"}}
+{"Event":"SparkListenerStageSubmitted","Stage Info":{"Stage ID":0,"Stage Name":"collect at Main.scala:88","Number of Tasks":10}}
+{"Event":"SparkListenerTaskStart","Stage ID":0,"Task Info":{"Task ID":0,"Executor ID":"1","Host":"worker1"}}
+{"Event":"SparkListenerSQLExecutionStart","execution_id":1,"description":"SELECT COUNT(*) FROM large_table GROUP BY category","time":1627984802000}
+{"Event":"SparkListenerTaskEnd","Stage ID":0,"Task Info":{"Task ID":0,"Executor ID":"1","Host":"worker1","Finish Time":1627984803000,"Failed":false,"Killed":false},"Task Metrics":{"Executor Run Time":1500,"JVM GC Time":200,"Memory Bytes Spilled":1048576}}
+{"Event":"SparkListenerStageCompleted","Stage Info":{"Stage ID":0,"Stage Name":"collect at Main.scala:88","Number of Tasks":10,"Submission Time":1627984801000,"Completion Time":1627984805000}}
+{"Event":"SparkListenerJobEnd","Job ID":0,"Completion Time":1627984806000,"Job Result":{"Result":"JobSucceeded"}}
+{"Event":"SparkListenerJobStart","Job ID":1,"Submission Time":1627984807000,"Stage IDs":[2,3],"Properties":{"callSite.short":"join at Analytics.scala:45"}}
+{"Event":"SparkListenerSQLExecutionStart","execution_id":2,"description":"SELECT t1.*, t2.* FROM table1 t1 JOIN table2 t2 ON t1.id = t2.id WHERE t1.value > 1000","time":1627984808000}
+{"Event":"SparkListenerStageSubmitted","Stage Info":{"Stage ID":2,"Stage Name":"join at Analytics.scala:45","Number of Tasks":20}}
+{"Event":"SparkListenerTaskStart","Stage ID":2,"Task Info":{"Task ID":20,"Executor ID":"2","Host":"worker2"}}
+{"Event":"SparkListenerExecutorMetricsUpdate","Executor ID":"2","Metrics":{"JVMHeapMemory":3000000000,"DiskBytesSpilled":2097152}}
+{"Event":"SparkListenerTaskEnd","Stage ID":2,"Task Info":{"Task ID":20,"Executor ID":"2","Host":"worker2","Finish Time":1627984810000,"Failed":false,"Killed":false},"Task Metrics":{"Executor Run Time":2500,"JVM GC Time":400,"Memory Bytes Spilled":2097152,"Shuffle Read Size":5242880,"Shuffle Write Size":3145728}}
+{"Event":"SparkListenerStageCompleted","Stage Info":{"Stage ID":2,"Stage Name":"join at Analytics.scala:45","Number of Tasks":20,"Submission Time":1627984808000,"Completion Time":1627984815000}}
+{"Event":"SparkListenerSQLExecutionEnd","execution_id":2,"time":1627984816000}
+{"Event":"SparkListenerJobEnd","Job ID":1,"Completion Time":1627984817000,"Job Result":{"Result":"JobSucceeded"}}
+{"Event":"SparkListenerJobStart","Job ID":2,"Submission Time":1627984818000,"Stage IDs":[4],"Properties":{"callSite.short":"aggregate at Analysis.scala:67"}}
+{"Event":"SparkListenerSQLExecutionStart","execution_id":3,"description":"SELECT category, AVG(value) as avg_value, COUNT(*) as count FROM large_table WHERE region = 'APAC' GROUP BY category HAVING COUNT(*) > 1000 ORDER BY avg_value DESC","time":1627984819000}
+{"Event":"SparkListenerStageSubmitted","Stage Info":{"Stage ID":4,"Stage Name":"aggregate at Analysis.scala:67","Number of Tasks":15}}
+{"Event":"SparkListenerTaskStart","Stage ID":4,"Task Info":{"Task ID":40,"Executor ID":"3","Host":"worker3"}}
+{"Event":"SparkListenerExecutorMetricsUpdate","Executor ID":"3","Metrics":{"JVMHeapMemory":3800000000,"DiskBytesSpilled":5242880}}
+{"Event":"SparkListenerTaskEnd","Stage ID":4,"Task Info":{"Task ID":40,"Executor ID":"3","Host":"worker3","Finish Time":1627984825000,"Failed":false,"Killed":false},"Task Metrics":{"Executor Run Time":6000,"JVM GC Time":800,"Memory Bytes Spilled":5242880,"Shuffle Read Size":10485760,"Shuffle Write Size":7340032}}
+{"Event":"SparkListenerStageCompleted","Stage Info":{"Stage ID":4,"Stage Name":"aggregate at Analysis.scala:67","Number of Tasks":15,"Submission Time":1627984819000,"Completion Time":1627984830000}}
+{"Event":"SparkListenerSQLExecutionEnd","execution_id":3,"time":1627984831000}
+{"Event":"SparkListenerJobEnd","Job ID":2,"Completion Time":1627984832000,"Job Result":{"Result":"JobSucceeded"}}
+{"Event":"SparkListenerApplicationEnd","Timestamp":1627984835000}

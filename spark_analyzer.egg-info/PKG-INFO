@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: spark-analyzer
+Version: 0.1
+Requires-Dist: numpy>=1.21.0
+Requires-Dist: pandas>=1.5.0
+Requires-Dist: plotly>=5.13.0
+Dynamic: requires-dist

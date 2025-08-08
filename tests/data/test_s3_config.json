@@ -1,0 +1,6 @@
+{
+    "bucket_name": "test-bucket",
+    "access_key": "test-access-key",
+    "secret_key": "test-secret-key",
+    "endpoint_url": "http://localhost:4566"
+}
