@@ -86,7 +86,8 @@ def generate_large_spark_history(num_jobs=3000):
             })
             
             # Sample task metrics
-            for task_id in range(0, num_tasks, num_tasks//2):  # Add metrics for some tasks
+            step = max(1, num_tasks//2)  # Ensure step is at least 1
+            for task_id in range(0, num_tasks, step):  # Add metrics for some tasks
                 executor_id = random.randint(1, 20)
                 
                 # Task metrics
