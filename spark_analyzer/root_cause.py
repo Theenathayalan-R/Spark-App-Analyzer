@@ -92,7 +92,8 @@ class RootCauseAnalyzer:
         x = np.arange(len(values))
         y = np.array(values)
         z = np.polyfit(x, y, 1)
-        return float(z[0] / np.mean(values)) if np.mean(values) != 0 else 0.0
+        mean_val = np.mean(values)
+        return float(z[0] / mean_val) if mean_val != 0 else 0.0
         
     def _get_avg_job_duration(self, metrics: Dict) -> float:
         """Calculate average job duration from metrics"""
@@ -198,9 +199,9 @@ class RootCauseAnalyzer:
                     }
                     issues.append(PerformanceIssue(
                         category='data_skew',
-                        severity=float(min(cv, 1.0)),
+                        severity=min(float(cv), 1.0),
                         impact=f'Stage {stage_id} shows significant data skew (CV: {cv:.2f})',
-                        recommendation=self._get_skew_recommendations(cv, tasks),
+                        recommendation=self._get_skew_recommendations(float(cv), tasks),
                         affected_stages=[stage_id],
                         metrics=skew_metrics
                     ))

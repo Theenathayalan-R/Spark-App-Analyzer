@@ -15,7 +15,8 @@ class TestDataLoader(unittest.TestCase):
 
     def test_load_events_from_file(self):
         loader = DataLoader()
-        events = loader.load_events_from_file(self.sample_file)
+        events_generator = loader.load_events_from_file(self.sample_file)
+        events = list(events_generator)  # Convert generator to list for testing
         self.assertTrue(isinstance(events, list))
         self.assertGreater(len(events), 0)
         # Find the first SparkListenerJobStart event

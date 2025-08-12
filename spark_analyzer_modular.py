@@ -6,30 +6,12 @@ Comprehensive, extensible Spark Application Analyzer
 """
 import json
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Iterator
 import pandas as pd
 import numpy as np
+
 # --- DataLoader ---
 class DataLoader:
-    def load_events_from_file(self, file_path: str) -> List[Dict[str, Any]]:
-        """Load Spark event log from local file."""
-        try:
-            with open(file_path, 'r') as f:
-                return [json.loads(line) for line in f if line.strip()]
-        except Exception as e:
-            print(f"Error loading from file: {e}")
-            return []
-
-    def load_events_from_s3(self, app_id: str) -> List[Dict[str, Any]]:
-        """Load Spark event log from S3."""
-        try:
-            path = f"spark-history/{app_id}"
-            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=path)
-            content = response['Body'].read().decode('utf-8')
-            return [json.loads(line) for line in content.split('\n') if line.strip()]
-        except Exception as e:
-            print(f"Error loading from S3: {e}")
-            return []
     """Loads Spark history logs from S3 or local file."""
     def __init__(self, config_path: Optional[str] = None):
         self.config = None
@@ -48,17 +30,36 @@ class DataLoader:
             aws_secret_access_key=self.config['secret_key'],
             endpoint_url=self.config['endpoint_url']
         )
-def main(args):
-    # Load events
-    loader = DataLoader(args.s3_config)
-    if args.s3_config:
-        events = loader.load_events_from_s3(args.history_file)
-    else:
-        events = loader.load_events_from_file(args.history_file)
-    if not events:
-        print("No events loaded. Exiting.")
-        return
-    # Parse events
+        self.bucket_name = self.config.get('bucket_name', 'default-bucket')
+
+    def load_events_from_file(self, file_path: str) -> Iterator[Dict[str, Any]]:
+        """Load Spark event log from local file using generator for memory efficiency."""
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        yield json.loads(line)
+        except Exception as e:
+            print(f"Error loading from file: {e}")
+            return
+
+    def load_events_from_s3(self, app_id: str) -> Iterator[Dict[str, Any]]:
+        """Load Spark event log from S3 using streaming for memory efficiency."""
+        if not self.s3_client:
+            print("S3 client not initialized. Please provide valid S3 config.")
+            return
+        try:
+            path = f"spark-history/{app_id}"
+            response = self.s3_client.get_object(Bucket=self.bucket_name, Key=path)
+            content = response['Body'].read().decode('utf-8')
+            for line in content.split('\n'):
+                line = line.strip()
+                if line:
+                    yield json.loads(line)
+        except Exception as e:
+            print(f"Error loading from S3: {e}")
+            return
 
 # --- EventParser ---
 class EventParser:
@@ -486,9 +487,9 @@ def main(args):
     # Load events
     loader = DataLoader(args.s3_config)
     if args.s3_config:
-        events = loader.load_events_from_s3(args.history_file)
+        events = list(loader.load_events_from_s3(args.history_file))
     else:
-        events = loader.load_events_from_file(args.history_file)
+        events = list(loader.load_events_from_file(args.history_file))
     if not events:
         print("No events loaded. Exiting.")
         return
