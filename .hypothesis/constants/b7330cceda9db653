@@ -1,0 +1,4 @@
+# file: /Users/theenathayalan/Documents/GitHub/Spark-App-Analyzer/spark_analyzer/code_mapper.py
+# hypothesis_version: 6.138.1
+
+['#', '*', '.java', '.py', '.scala', '.sql', '/*', '//', '>> ', 'CodeMapper', 'SPARK_STAGE', '[ ,]+', 'affected_stages', 'annotation', 'callsite', 'category', 'description', 'file', 'ignore', 'java', 'job_id', 'language', 'line', 'python', 'r', 'scala', 'snippet', 'snippet_start_line', 'source', 'spark_stage', 'sql', 'stage_id', 'stage_ids', 'unknown', 'utf-8']

@@ -6,9 +6,28 @@ Comprehensive, extensible Spark Application Analyzer
 """
 import json
 import sys
-from typing import Dict, List, Any, Optional, Iterator
+import os
+from typing import Dict, List, Any, Optional, Iterator, TYPE_CHECKING
 import pandas as pd
 import numpy as np
+import html as html_mod
+import logging
+from collections import defaultdict
+
+# Configure logging
+logging.basicConfig(level=os.environ.get('SPARK_ANALYZER_LOG_LEVEL', 'INFO'),
+                    format='[%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+# Ensure optional CodeMapper import block near imports
+# (Already attempted earlier; add if missing)
+try:
+    CodeMapper  # type: ignore  # noqa: F821
+except NameError:  # pragma: no cover
+    try:
+        from spark_analyzer.code_mapper import CodeMapper  # type: ignore
+    except Exception:  # pragma: no cover
+        CodeMapper = None  # type: ignore
 
 # --- DataLoader ---
 class DataLoader:
@@ -17,6 +36,7 @@ class DataLoader:
         self.config = None
         self.s3_client = None
         self.bucket_name = None
+        self.malformed_lines = 0
         if config_path:
             self._load_s3_config(config_path)
 
@@ -36,12 +56,19 @@ class DataLoader:
         """Load Spark event log from local file using generator for memory efficiency."""
         try:
             with open(file_path, 'r') as f:
-                for line in f:
+                for idx, line in enumerate(f, 1):
                     line = line.strip()
-                    if line:
+                    if not line:
+                        continue
+                    try:
                         yield json.loads(line)
+                    except Exception as e:  # malformed line
+                        self.malformed_lines += 1
+                        if self.malformed_lines < 5:
+                            logger.warning(f"Skipping malformed line {idx}: {e}")
+                        continue
         except Exception as e:
-            print(f"Error loading from file: {e}")
+            logger.error(f"Error loading from file: {e}")
             return
 
     def load_events_from_s3(self, app_id: str) -> Iterator[Dict[str, Any]]:
@@ -246,12 +273,12 @@ class Analyzer:
             'max_duration': float(df['duration'].max()) if not df.empty else 0,
             'min_duration': float(df['duration'].min()) if not df.empty else 0,
             'success_rate': float((df['status'] == 'JobSucceeded').mean() * 100) if not df.empty else 0,
-            'failed_jobs': df[df['status'] != 'JobSucceeded'].to_dict('records'),
-            'slow_jobs': df[df['duration'] > df['duration'].mean() + df['duration'].std()].to_dict('records') if not df.empty else [],
+            'failed_jobs': df[df['status'] != 'JobSucceeded'].to_dict('records'),  # type: ignore[arg-type]
+            'slow_jobs': df[df['duration'] > df['duration'].mean() + df['duration'].std()].to_dict('records') if not df.empty else [],  # type: ignore[arg-type]
         }
         
         # Basic bottleneck detection: jobs with duration > 2*avg
-        basic_bottlenecks = df[df['duration'] > 2 * df['duration'].mean()].to_dict('records') if not df.empty else []
+        basic_bottlenecks = df[df['duration'] > 2 * df['duration'].mean()].to_dict('records') if not df.empty else []  # type: ignore[arg-type]
         
         performance_issues = []
         if self.root_cause_analyzer:
@@ -286,43 +313,67 @@ class RecommendationEngine:
             self.pyspark_analyzer = PySparkCodeAnalyzer()
         except ImportError:
             self.pyspark_analyzer = None
-    
-    def generate(self, analysis: Dict[str, Any], parsed_data: Dict[str, Any] = None) -> List[str]:
-        """Generate actionable recommendations based on analysis."""
-        recs = []
+
+    def _config_snippets(self, category: str) -> List[str]:
+        mapping = {
+            'data_skew': ["spark.sql.adaptive.enabled=true", "spark.sql.adaptive.skewJoin.enabled=true"],
+            'shuffle_spill': ["spark.shuffle.sort.bypassMergeThreshold=200", "spark.reducer.maxSizeInFlight=96m"],
+            'gc_overhead': ["--conf spark.executor.memory=8g", "--conf spark.memory.fraction=0.6"],
+            'cpu_bottleneck': ["--conf spark.executor.cores=4", "--conf spark.dynamicAllocation.enabled=true"],
+            'memory_bottleneck': ["--conf spark.memory.fraction=0.7", "--conf spark.storage.memoryFraction=0.4"],
+        }
+        return mapping.get(category, [])
+
+    def generate(self, analysis: Dict[str, Any], parsed_data: Optional[Dict[str, Any]] = None) -> List[str]:
+        recs_struct = []
         stats = analysis.get('job_stats', {})
-        
-        # Basic recommendations
+
+        def add(msg: str, sev: float = 0.4):
+            recs_struct.append({'msg': msg, 'severity': sev})
+
+        baseline_added = False
         if stats.get('failed_jobs'):
-            recs.append("Some jobs failed. Check logs for errors and consider increasing executor memory or reviewing input data quality. See: https://spark.apache.org/docs/latest/job-scheduling.html#failure-recovery")
+            add("[FAILURES] Some jobs failed. Check logs for errors and consider increasing executor memory or reviewing input data quality.", 0.8)
         if stats.get('slow_jobs'):
-            recs.append("Several jobs are significantly slower than average. Consider increasing parallelism, tuning partitions, or caching intermediate results. See: https://spark.apache.org/docs/latest/tuning.html")
+            add("[SLOW_JOBS] Several jobs are significantly slower than average. Tune parallelism / partitions or cache intermediate results.", 0.6)
+            baseline_added = True
         if analysis.get('bottlenecks'):
-            recs.append("Detected bottleneck jobs (duration > 2x average). Investigate stages for skew, shuffles, or GC overhead. See: https://spark.apache.org/docs/latest/tuning.html#data-skew")
-        
-        # Advanced performance issue recommendations
+            add("[BOTTLENECKS] Detected bottleneck jobs (>2x avg). Investigate skew, shuffles, or GC overhead.", 0.7)
+            baseline_added = True
+
         performance_issues = analysis.get('performance_issues', [])
-        for issue in performance_issues[:3]:  # Top 3 issues
-            recs.append(f"[{issue.category.upper()}] {issue.impact}: {issue.recommendation}")
-        
-        # PySpark-specific recommendations
+        for issue in performance_issues:
+            base = f"[{issue.category.upper()}] {issue.impact}: {issue.recommendation}"
+            snippets = self._config_snippets(issue.category)
+            if snippets:
+                base += " | Config: " + ', '.join(snippets)
+            add(base, min(1.0, 0.5 + issue.severity/2))
+            baseline_added = True
+
         if self.pyspark_analyzer and parsed_data:
             try:
                 pyspark_issues = self.pyspark_analyzer.analyze_pyspark_patterns(parsed_data)
-                for issue in pyspark_issues[:2]:  # Top 2 PySpark issues
-                    recs.append(f"[PYSPARK-{issue.severity}] {issue.description}: {issue.recommendation}")
+                sev_map = {'HIGH':0.9,'MEDIUM':0.6,'LOW':0.3}
+                for issue in pyspark_issues:
+                    add(f"[PYSPARK-{issue.severity}] {issue.description}: {issue.recommendation}", sev_map.get(issue.severity.upper(),0.5))
+                    baseline_added = True
             except Exception as e:
-                print(f"Warning: PySpark analysis failed: {e}")
-        
-        if not recs:
-            recs.append("No major issues detected. Review job durations and resource usage for further optimization. Consider increasing parallelism or tuning shuffle operations for better performance.")
-        
-        return recs
+                logger.warning(f"PySpark analysis failed: {e}")
+
+        if not baseline_added:
+            add("[BASELINE] No major issues detected; review parallelism and shuffle configuration for incremental gains.", 0.2)
+
+        dedup: Dict[str, float] = {}
+        for r in recs_struct:
+            if r['msg'] not in dedup or r['severity'] > dedup[r['msg']]:
+                dedup[r['msg']] = r['severity']
+        ordered = sorted(dedup.items(), key=lambda x: x[1], reverse=True)
+        return [f"(sev={sev:.2f}) {msg}" for msg, sev in ordered]
 
 # --- Reporter ---
 class Reporter:
     """Generates HTML/Markdown reports with links and summaries."""
-    def generate(self, parsed: Dict[str, Any], analysis: Dict[str, Any], recommendations: List[str], output_file: str = "spark_analysis_report.html") -> None:
+    def generate(self, parsed: Dict[str, Any], analysis: Dict[str, Any], recommendations: List[str], output_file: str = "spark_analysis_report.html", code_mappings: Optional[List[Dict[str, Any]]] = None) -> None:
         """Generate a modern HTML report with summary, bottlenecks, and recommendations."""
         stats = analysis.get('job_stats', {})
         bottlenecks = analysis.get('bottlenecks', [])
@@ -361,7 +412,7 @@ class Reporter:
             except ImportError:
                 pass
 
-        html = [
+        html_parts = [  # renamed from html to avoid shadowing html_mod
             '<!DOCTYPE html>',
             '<html><head><meta charset="utf-8">',
             '<title>Spark Application Analysis Report</title>',
@@ -402,6 +453,7 @@ class Reporter:
             '<a href="#bottlenecks">Bottlenecks</a>',
             '<a href="#failures">Failures</a>',
             '<a href="#recommendations">Recommendations</a>',
+            ("<a href=\"#code-mapping\">Code Mapping</a>" if code_mappings else ''),
             '</div></div>',
             '<div class="container">',
             '<section id="summary" class="section">',
@@ -467,17 +519,44 @@ class Reporter:
             '<h2>Recommendations</h2>',
             ''.join([f'<div class="recommendation">{rec}</div>' for rec in recommendations]),
             '</section>',
+        ]
+        # Replace appended large block by reusing previous content
+        # Reconstruct code mapping section with proper escaping
+        if code_mappings is not None:
+            if not code_mappings:
+                code_section = '<section id="code-mapping" class="section"><h2>Code Mapping</h2><div>No code repository mappings found.</div></section>'
+            else:
+                blocks = []
+                for m in code_mappings:
+                    blocks.append(
+                        f"<div class='recommendation'><b>Job {m.get('job_id')}</b> → {m.get('file')}:{m.get('line')}" \
+                        f"<br>Issues: {', '.join(m.get('related_issue_categories', [])) or 'None'}" \
+                        f"<pre class='code-fix'><code class=\"language-{html_mod.escape(m.get('language','python'))}\">{html_mod.escape(m.get('snippet',''))}</code></pre></div>"
+                    )
+                code_section = '<section id="code-mapping" class="section"><h2>Code Mapping</h2>' + ''.join(blocks) + '</section>'
+            html_parts.append(code_section)
+        # NOTE: Rebuilding trailing sections
+        # (We assume earlier content up to recommendations already appended)
+        html_parts.extend([
             '<section id="jobs" class="section">',
             '<h2>All Jobs</h2>',
             '<table class="job-table"><tr><th>Job ID</th><th>Status</th><th>Start Time</th><th>End Time</th><th>Duration (s)</th><th>Description</th><th>Query</th></tr>',
             ''.join([
-                f'<tr><td>{job["job_id"]}</td><td>{job["status"]}</td><td>{fmt_time(job.get("submission_time"))}</td><td>{fmt_time(job.get("completion_time"))}</td><td>{fmt_sec(job["duration"])}</td><td>{job["description"]}</td><td><code>{find_sql_for_job(job, sql_ops)}</code></td></tr>'
+                '<tr>' +
+                f'<td>{job["job_id"]}</td>' +
+                f'<td>{job["status"]}</td>' +
+                f'<td>{fmt_time(job.get("submission_time"))}</td>' +
+                f'<td>{fmt_time(job.get("completion_time"))}</td>' +
+                f'<td>{fmt_sec(job["duration"])}</td>' +
+                f'<td>{job["description"]}</td>' +
+                f'<td><code>{find_sql_for_job(job, sql_ops)}</code></td>' +
+                '</tr>'
                 for job in parsed.get('jobs', [])
             ]),
             '</table></section>',
-            '</div></body></html>'
-        ]
-        html_content = ''.join(html)
+        ])
+        html_parts.append('</div></body></html>')
+        html_content = ''.join(html_parts)
         with open(output_file, "w") as f:
             f.write(html_content)
         print(f"Report generated: {output_file}")
@@ -502,9 +581,17 @@ def main(args):
     # Recommendations
     recommender = RecommendationEngine()
     recommendations = recommender.generate(analysis, parsed)
+    # Optional code mapping
+    code_mappings = None
+    if getattr(args, 'code_repo', None) and CodeMapper:
+        try:
+            mapper = CodeMapper(args.code_repo)  # type: ignore[operator]
+            code_mappings = mapper.map_jobs_to_code(parsed.get('jobs', []), analysis.get('performance_issues', []))
+        except Exception as e:  # pragma: no cover
+            print(f"Warning: code mapping failed: {e}")
     # Report
     reporter = Reporter()
-    reporter.generate(parsed, analysis, recommendations, output_file=args.report)
+    reporter.generate(parsed, analysis, recommendations, output_file=args.report, code_mappings=code_mappings)
 
 if __name__ == "__main__":
     import argparse
@@ -512,5 +599,7 @@ if __name__ == "__main__":
     parser.add_argument('history_file', help='Path to Spark history log file')
     parser.add_argument('--s3-config', help='Path to S3 config JSON', default=None)
     parser.add_argument('--report', help='Output HTML report file', default='spark_analysis_report.html')
+    parser.add_argument('--code-repo', help='Path to source code repository for mapping job call sites to code', default=None)
+    parser.add_argument('--streaming', action='store_true', help='Enable streaming (incremental) parsing mode')
     args = parser.parse_args()
     main(args)

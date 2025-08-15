@@ -1,0 +1,10 @@
+{"Event":"SparkListenerApplicationStart","App Name":"TestApp","App ID":"app-001","Timestamp":1734370000000}
+{"Event":"SparkListenerJobStart","Job ID":1,"Submission Time":1734370001000,"Stage IDs":[1,2],"Properties":{"callSite.short":"job_1 at tests/sample_repo/pipeline.py:15"}}
+{"Event":"SparkListenerStageSubmitted","Stage Info":{"Stage ID":1,"Stage Name":"stage_1","Number of Tasks":2}}
+{"Event":"SparkListenerStageCompleted","Stage Info":{"Stage ID":1,"Stage Name":"stage_1","Number of Tasks":2,"Submission Time":1734370001000,"Completion Time":1734370003000}}
+{"Event":"SparkListenerStageSubmitted","Stage Info":{"Stage ID":2,"Stage Name":"stage_2","Number of Tasks":2}}
+{"Event":"SparkListenerStageCompleted","Stage Info":{"Stage ID":2,"Stage Name":"stage_2","Number of Tasks":2,"Submission Time":1734370003000,"Completion Time":1734370006000}}
+{"Event":"SparkListenerSQLExecutionStart","execution_id":101,"description":"SELECT * FROM table_a WHERE id > 10","time":1734370001500}
+{"Event":"SparkListenerSQLExecutionEnd","execution_id":101,"time":1734370003500}
+{"Event":"SparkListenerJobEnd","Job ID":1,"Completion Time":1734370006000,"Job Result":{"Result":"JobSucceeded"}}
+{"Event":"SparkListenerApplicationEnd","Timestamp":1734370007000}

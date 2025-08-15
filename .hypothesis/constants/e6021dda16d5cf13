@@ -1,0 +1,4 @@
+# file: /Users/theenathayalan/Documents/GitHub/Spark-App-Analyzer/spark_analyzer/dashboard.py
+# hypothesis_version: 6.138.1
+
+[100, 200, 3000, 8050, '4px 0', 'CPU Usage', 'End', 'Executor', 'Job Duration', 'Memory Usage', 'Performance Issues', 'Performance Summary', 'Sample', 'Shuffle Size', 'Start', 'Viridis', 'children', 'cpu', 'duration', 'end_time', 'executors', 'figure', 'issues', 'issues-panel', 'label', 'localhost', 'main-graph', 'margin', 'mem', 'memory', 'metric-selector', 'n_intervals', 'refresh-interval', 'resource-heatmap', 'resource_history', 'series', 'shuffle', 'stage-timeline', 'stage_id', 'stages', 'start_time', 'status', 't', 'time-slider', 'v', 'value']

@@ -1,7 +1,7 @@
 """
 Root Cause Analysis module for automatically identifying performance bottlenecks
 """
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 from dataclasses import dataclass
 from collections import defaultdict
@@ -13,48 +13,51 @@ class PerformanceIssue:
     impact: str
     recommendation: str
     affected_stages: List[int]
-    metrics: Dict[str, float]  # Additional metrics for detailed analysis
+    metrics: Dict[str, Any]  # Additional metrics for detailed analysis
 
 class RootCauseAnalyzer:
     def __init__(self):
         self.known_patterns = self._load_performance_patterns()
         self.history: List[Dict] = []  # Store historical metrics for trend analysis
+        self._last_critical_path: List[int] = []
         
     def analyze_bottlenecks(self, metrics: Dict) -> List[PerformanceIssue]:
         """Automatically identify root causes of performance issues"""
         issues = []
         self.history.append(metrics)  # Store for trend analysis
-        
+        # Critical path & memory pressure analyzed after stages parsed
         # Analyze data skew
         skew_issues = self._detect_data_skew(metrics)
         if skew_issues:
             issues.extend(skew_issues)
-            
         # Analyze shuffle patterns
         shuffle_issues = self._detect_shuffle_bottlenecks(metrics)
         if shuffle_issues:
             issues.extend(shuffle_issues)
-            
         # Analyze resource utilization
         resource_issues = self._detect_resource_bottlenecks(metrics)
         if resource_issues:
             issues.extend(resource_issues)
-            
         # Analyze performance trends
         trend_issues = self._detect_performance_trends()
         if trend_issues:
             issues.extend(trend_issues)
-            
         # Analyze stage dependencies
         dependency_issues = self._detect_stage_dependencies(metrics)
         if dependency_issues:
             issues.extend(dependency_issues)
-            
         # Analyze GC impact
         gc_issues = self._detect_gc_issues(metrics)
         if gc_issues:
             issues.extend(gc_issues)
-            
+        # Memory pressure model
+        mem_pressure = self._detect_memory_pressure(metrics)
+        if mem_pressure:
+            issues.extend(mem_pressure)
+        # Critical path
+        crit_path_issue = self._detect_critical_path(metrics)
+        if crit_path_issue:
+            issues.append(crit_path_issue)
         return sorted(issues, key=lambda x: x.severity, reverse=True)
         
     def _detect_performance_trends(self) -> List[PerformanceIssue]:
@@ -189,13 +192,16 @@ class RootCauseAnalyzer:
         for stage_id, tasks in metrics.get('tasks', {}).items():
             durations = [t.get('duration', 0) for t in tasks]
             if durations:
-                cv = np.std(durations) / np.mean(durations)
+                mean_val = float(np.mean(durations)) if durations else 0.0
+                if len(durations) < 2 or mean_val <= 0:
+                    continue  # Not enough data to assess skew safely
+                cv = float(np.std(durations) / mean_val) if mean_val else 0.0
                 if cv > 0.5:  # High coefficient of variation indicates skew
                     skew_metrics = {
                         'coefficient_of_variation': float(cv),
                         'max_duration': float(max(durations)),
                         'min_duration': float(min(durations)),
-                        'avg_duration': float(np.mean(durations))
+                        'avg_duration': float(mean_val)
                     }
                     issues.append(PerformanceIssue(
                         category='data_skew',
@@ -353,3 +359,77 @@ class RootCauseAnalyzer:
                 'threshold': 0.2
             }
         }
+    
+    def _detect_memory_pressure(self, metrics: Dict) -> List[PerformanceIssue]:
+        """Estimate memory pressure by comparing spill size to shuffle volume and GC ratio."""
+        issues: List[PerformanceIssue] = []
+        shuffle = metrics.get('shuffle', {})
+        gc = metrics.get('gc', {})
+        avg_gc_ratio = 0.0
+        ratios = []
+        for ex, data in gc.items():
+            t = float(data.get('executor_time', 0) or 0)
+            if t > 0:
+                ratios.append(float(data.get('gc_time', 0))/t)
+        if ratios:
+            avg_gc_ratio = float(np.mean(ratios))
+        for stage_id, sdata in shuffle.items():
+            read_w = float(sdata.get('shuffle_read_bytes', 0) + sdata.get('shuffle_write_bytes', 0))
+            spill = float(sdata.get('disk_spill_size', 0))
+            if read_w <= 0:
+                continue
+            spill_ratio = spill / read_w
+            if spill_ratio > 0.6 or (spill_ratio > 0.3 and avg_gc_ratio > 0.15):
+                issues.append(PerformanceIssue(
+                    category='memory_pressure_model',
+                    severity=min(1.0, (spill_ratio + avg_gc_ratio)/1.5),
+                    impact=f'Stage {stage_id} shows high spill vs shuffle volume (spill_ratio={spill_ratio:.2f}, avg_gc={avg_gc_ratio:.2%})',
+                    recommendation='Increase executor memory / tune partitions; consider caching & adjust spark.memory.fraction',
+                    affected_stages=[stage_id],
+                    metrics={'spill_ratio': spill_ratio, 'avg_gc_ratio': avg_gc_ratio, 'spill_bytes': spill, 'shuffle_bytes': read_w}
+                ))
+        return issues
+
+    def _detect_critical_path(self, metrics: Dict) -> Optional[PerformanceIssue]:
+        """Compute longest stage dependency path weighted by stage durations."""
+        stages: Dict[int, Dict[str, Any]] = metrics.get('stages', {})  # type: ignore
+        if not stages:
+            return None
+        # Build DAG: parent -> children
+        children = defaultdict(list)
+        for sid, sdata in stages.items():
+            for p in sdata.get('parent_ids', []):
+                children[p].append(sid)
+        # Memoized DFS
+        memo: Dict[int, Tuple[float, List[int]]] = {}
+        def dfs(node: int) -> Tuple[float, List[int]]:
+            if node in memo:
+                return memo[node]
+            dur = float(stages.get(node, {}).get('duration', 0) or 0)
+            best = (dur, [node])
+            for ch in children.get(node, []):
+                c_dur, c_path = dfs(ch)
+                if dur + c_dur > best[0]:
+                    best = (dur + c_dur, [node] + c_path)
+            memo[node] = best
+            return best
+        # Roots = stages without parents
+        roots = [sid for sid, sdata in stages.items() if not sdata.get('parent_ids')]
+        if not roots:
+            return None
+        best_overall = (0.0, [])
+        for r in roots:
+            total, path = dfs(r)
+            if total > best_overall[0]:
+                best_overall = (total, path)
+        if best_overall[0] <= 0 or len(best_overall[1]) < 2:
+            return None
+        self._last_critical_path = best_overall[1]
+        return PerformanceIssue(
+            category='critical_path',
+            severity=min(1.0, best_overall[0] / (best_overall[0] + 1_000)),  # normalized simple
+            impact=f'Critical path duration {best_overall[0]:.0f} ms across stages {best_overall[1]}',
+            recommendation='Optimize earliest long stages in the critical path to reduce end-to-end time',
+            affected_stages=best_overall[1],
+            metrics={'path': best_overall[1], 'path_duration_ms': float(best_overall[0])}
+        )

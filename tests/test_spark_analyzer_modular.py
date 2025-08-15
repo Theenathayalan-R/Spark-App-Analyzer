@@ -47,7 +47,7 @@ class TestRecommendationEngine(unittest.TestCase):
     def test_generate(self):
         recommender = RecommendationEngine()
         recs = recommender.generate({'job_stats': {}})
-        self.assertTrue(any('parallelism' in r or 'shuffle' in r for r in recs))
+        self.assertTrue(any('parallelism' in r.lower() or 'shuffle' in r.lower() for r in recs))
 
 class TestReporter(unittest.TestCase):
     def test_generate(self):

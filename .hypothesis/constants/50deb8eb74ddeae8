@@ -1,0 +1,4 @@
+# file: /Users/theenathayalan/Documents/GitHub/Spark-App-Analyzer/spark_analyzer/sql_optimizer.py
+# hypothesis_version: 6.138.1
+
+[0.0, 0.1, 0.15, 0.2, 0.25, 0.4, 0.5, 0.6, 0.7, 0.9, ' IN ', ' OR ', 'AQEShuffleRead', 'AVG(', 'AdaptiveSparkPlan', 'BroadcastHashJoin', 'COUNT(DISTINCT', 'CartesianProduct', 'Cross Join', 'Exchange', 'GROUP BY', 'GROUP BY.*HAVING', 'GROUP BY.+HAVING', 'GROUP BY.+ORDER BY', 'JOIN', 'JOIN.*ON', 'LIKE', 'ORDER BY', 'PARTITION BY', 'PushedFilters', 'SUM(', 'ShuffleHashJoin', 'ShuffledHashJoin', 'SkewJoin', 'SortMergeJoin', 'WHERE', 'WINDOW', 'WholeStageCodegen', 'broadcast', 'broadcast_join', 'cartesian', 'children', 'complex_agg', 'data_skew', 'description', 'filter pushdown', 'filter_pushdown', 'name', 'nodeName', 'optimization', 'pattern', 'query_id', 'query_plan', 'shuffle', 'sparkPlanInfo', 'spark_plan_info', '{']

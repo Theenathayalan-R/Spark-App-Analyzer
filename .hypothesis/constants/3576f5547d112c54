@@ -1,0 +1,4 @@
+# file: /Users/theenathayalan/Documents/GitHub/Spark-App-Analyzer/pyspark_code_analyzer.py
+# hypothesis_version: 6.138.1
+
+[0.1, 0.2, 100, 1024, 10000, 20000, 'DiskBytesSpilled', 'FUNCTION', 'HIGH', 'JVMHeapMemory', 'LOW', 'MEDIUM', 'PYTHON', 'UDF', 'Unknown', 'collect', 'collect_abuse', 'description', 'disk_spill_size', 'duration', 'execution_id', 'executor_time', 'gc', 'gc_time', 'high_gc_overhead', 'impact', 'inefficient_udf', 'job_id', 'jobs', 'memory', 'memory_pressure', 'metrics', 'missing_cache', 'performance', 'poor_partitioning', 'shuffle', 'shuffle_read_bytes', 'shuffle_write_bytes', 'sql_operations', 'unnecessary_shuffle']

@@ -1,5 +1,12 @@
 # Spark Application Analyzer - Efficiency Analysis Report
 
+> Status Note (Aug 2025 Update):
+> - Streaming loaders implemented (generators) ✅
+> - No duplicate `main()` in `spark_analyzer_modular.py` (report was outdated) ✅
+> - Added `.gitignore` for large/generated artifacts ✅
+> - Marked `dry_run.py` deprecated ✅
+> - Remaining suggestions (HTML templating, minor numpy casting, dashboard expansion) are future enhancements.
+
 ## Executive Summary
 
 This report documents efficiency issues found in the Spark Application Analyzer codebase and provides recommendations for optimization. The analysis identified several critical performance bottlenecks, particularly in data loading operations that can consume excessive memory for large Spark history files.

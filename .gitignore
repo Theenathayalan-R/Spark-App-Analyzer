@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+
+# Virtual env
+venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+
+# Reports / generated artifacts
+spark_analysis_report.html
+job_durations.html
+reports/
+
+# Large synthetic test data
+tests/data/large_spark_history.json
+
+# Local configs / credentials
+s3_config.json
+
+# OS / misc
+.DS_Store
+
+# Coverage / test
+.coverage
+htmlcov/
+pytest.cache/
+
