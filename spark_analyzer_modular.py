@@ -522,6 +522,8 @@ class Reporter:
             '.job-table th, .job-table td, .issue-table th, .issue-table td { border: 1px solid #eee; padding: 0.5rem 0.75rem; text-align: left; }',
             '.job-table th, .issue-table th { background: #f5f6fa; }',
             '.performance-issue { background: #fff9e6; border-left: 4px solid #ffa500; margin: 1rem 0; padding: 1rem; border-radius: 6px; }',
+            '.recommendation-group { background:#eef5ff; border-left:4px solid #1d6fdc; margin:1rem 0; padding:1rem; border-radius:6px; }',
+            '.rec-items { margin:0.5rem 0 0 0.5rem; }',
             '</style>',
             '</head><body>',
             '<div class="navbar"><h1><i class="fas fa-chart-line"></i> Spark Application Analysis</h1>',
@@ -545,30 +547,28 @@ class Reporter:
             f'<div class="summary-card"><h3>Performance Issues</h3><div>{len(analysis.get("performance_issues", []))}</div></div>',
             f'<div class="summary-card"><h3>Issue Categories</h3><div>{len(cat_counts)}</div></div>',
             '</div></section>',
-            
             '<section id="pyspark-issues" class="section">',
             '<h2><i class="fab fa-python"></i> PySpark Code Issues</h2>',
             ("<div>No PySpark-specific issues detected.</div>" if not pyspark_issues else ""),
             ''.join([
-                f'<div class="pyspark-issue severity-{issue.severity.lower()}">'
-                f'<h4>[{issue.severity}] {issue.pattern.replace("_", " ").title()}</h4>'
-                f'<p><strong>Problem:</strong> {issue.description}</p>'
-                f'<p><strong>Impact:</strong> {issue.estimated_impact}</p>'
-                f'<p><strong>Fix:</strong> {issue.recommendation}</p>'
-                f'<div class="code-fix"><pre><code class="language-python">{issue.code_fix}</code></pre></div>'
+                f'<div class="pyspark-issue severity-{issue.severity.lower()}">'\
+                f'<h4>[{issue.severity}] {issue.pattern.replace("_", " ").title()}</h4>'\
+                f'<p><strong>Problem:</strong> {issue.description}</p>'\
+                f'<p><strong>Impact:</strong> {issue.estimated_impact}</p>'\
+                f'<p><strong>Fix:</strong> {issue.recommendation}</p>'\
+                f'<div class="code-fix"><pre><code class="language-python">{issue.code_fix}</code></pre></div>'\
                 f'</div>'
                 for issue in pyspark_issues
             ]),
             '</section>',
-            
             '<section id="performance-issues" class="section">',
             '<h2><i class="fas fa-tachometer-alt"></i> Performance Issues</h2>',
             ("<div>No performance issues detected by advanced analysis.</div>" if not performance_issues else ""),
             ''.join([
-                f'<div class="performance-issue">'
-                f'<strong>[{issue.category.upper()}]</strong> {issue.impact}<br>'
-                f'<em>Recommendation:</em> {issue.recommendation}<br>'
-                f'<em>Severity:</em> {issue.severity:.2f} | <em>Affected Stages:</em> {", ".join(map(str, issue.affected_stages)) if issue.affected_stages else "N/A"}'
+                f'<div class="performance-issue">'\
+                f'<strong>[{issue.category.upper()}]</strong> {issue.impact}<br>'\
+                f'<em>Recommendation:</em> {issue.recommendation}<br>'\
+                f'<em>Severity:</em> {issue.severity:.2f} | <em>Affected Stages:</em> {", ".join(map(str, issue.affected_stages)) if issue.affected_stages else "N/A"}'\
                 f'</div>'
                 for issue in performance_issues
             ]),
@@ -579,47 +579,76 @@ class Reporter:
                  for cat, cnt, sev, stages in category_summary_rows
              ]) + '</table>'),
             '</section>',
-            '<section id="bottlenecks" class="section">',
-            '<h2>Bottleneck Jobs</h2>',
-            ("<div>No bottlenecks detected.</div>" if not bottlenecks else ""),
-            ''.join([
-                f'<div class="bottleneck"><b>Job {job["job_id"]}</b>: '
-                f'Start: {fmt_time(job.get("submission_time"))}, End: {fmt_time(job.get("completion_time"))}, Duration: {fmt_sec(job["duration"])}'
-                f', Status: {job["status"]}, Desc: {job["description"]}'
-                + (f'<br><b>Query:</b> <code>{find_sql_for_job(job, sql_ops)}</code>' if find_sql_for_job(job, sql_ops) else '') + '</div>'
-                for job in bottlenecks
-            ]),
-            '</section>',
-            '<section id="failures" class="section">',
-            '<h2>Failed Jobs</h2>',
-            ("<div>No failed jobs.</div>" if not failed_jobs else ""),
-            ''.join([
-                f'<div class="failed"><b>Job {job["job_id"]}</b>: '
-                f'Start: {fmt_time(job.get("submission_time"))}, End: {fmt_time(job.get("completion_time"))}, Duration: {fmt_sec(job["duration"])}'
-                f', Status: {job["status"]}, Desc: {job["description"]}'
-                + (f'<br><b>Query:</b> <code>{find_sql_for_job(job, sql_ops)}</code>' if find_sql_for_job(job, sql_ops) else '') + '</div>'
-                for job in failed_jobs
-            ]),
-            '</section>',
-            '<section id="recommendations" class="section">',
-            '<h2>Recommendations</h2>',
-            ''.join([f'<div class="recommendation">{rec}</div>' for rec in recommendations]),
-            '</section>',
+            # Recommendations section will be appended later (grouped)
         ]
+        # Build grouped recommendations section separately (simpler & robust)
+        rec_html_parts = ['<section id="recommendations" class="section">', '<h2>Recommendations</h2>']
+        if recommendations:
+            from collections import defaultdict as _dd
+            rec_groups: Dict[str, List[tuple]] = _dd(list)
+            for rec in recommendations:
+                sev_val = 0.0
+                if rec.startswith('(sev='):
+                    end_idx = rec.find(')')
+                    if end_idx != -1:
+                        try:
+                            sev_val = float(rec[5:end_idx])
+                        except ValueError:
+                            pass
+                lb = rec.find('[')
+                rb = rec.find(']', lb+1) if lb != -1 else -1
+                tag = rec[lb:rb+1] if lb != -1 and rb != -1 and rb > lb else '[OTHER]'
+                rec_groups[tag].append((rec, sev_val))
+            for tag in sorted(rec_groups.keys()):
+                items = rec_groups[tag]
+                max_sev = max((sev for _, sev in items), default=0.0)
+                rec_html_parts.append(
+                    f"<div class='recommendation-group'><h4>{html_mod.escape(tag)} (count {len(items)}, max sev {max_sev:.2f})</h4><ul class='rec-items'>" +
+                    ''.join([f"<li>{html_mod.escape(r)}</li>" for r, _ in items]) + '</ul></div>'
+                )
+        else:
+            rec_html_parts.append('<div>No recommendations.</div>')
+        rec_html_parts.append('</section>')
+        html_parts.extend(rec_html_parts)
         # Replace appended large block by reusing previous content
         # Reconstruct code mapping section with proper escaping
         if code_mappings is not None:
             if not code_mappings:
                 code_section = '<section id="code-mapping" class="section"><h2>Code Mapping</h2><div>No code repository mappings found.</div></section>'
             else:
-                blocks = []
+                # Consolidate identical code snippets (same file/line/snippet/language) across multiple jobs
+                consolidated = {}
                 for m in code_mappings:
-                    blocks.append(
-                        f"<div class='recommendation'><b>Job {m.get('job_id')}</b> → {m.get('file')}:{m.get('line')}" \
-                        f"<br>Issues: {', '.join(m.get('related_issue_categories', [])) or 'None'}" \
-                        f"<pre class='code-fix'><code class=\"language-{html_mod.escape(m.get('language','python'))}\">{html_mod.escape(m.get('snippet',''))}</code></pre></div>"
+                    key = (
+                        m.get('file'),
+                        m.get('line'),
+                        m.get('snippet'),
+                        m.get('language', 'python')
                     )
-                code_section = '<section id="code-mapping" class="section"><h2>Code Mapping</h2>' + ''.join(blocks) + '</section>'
+                    entry = consolidated.setdefault(key, {
+                        'file': m.get('file'),
+                        'line': m.get('line'),
+                        'language': m.get('language', 'python'),
+                        'snippet': m.get('snippet', ''),
+                        'job_ids': set(),
+                        'categories': set()
+                    })
+                    job_id = m.get('job_id')
+                    if job_id is not None:
+                        entry['job_ids'].add(job_id)
+                    for cat in m.get('related_issue_categories', []) or []:
+                        entry['categories'].add(cat)
+                blocks = []
+                for entry in consolidated.values():
+                    jobs_list = sorted(entry['job_ids'])
+                    cats_list = sorted(entry['categories'])
+                    blocks.append(
+                        f"<div class='recommendation'><b>Jobs:</b> {', '.join(map(str, jobs_list)) or 'N/A'}<br>"\
+                        f"<b>Location:</b> {entry['file']}:{entry['line']}<br>"\
+                        f"<b>Issues:</b> {', '.join(cats_list) if cats_list else 'None'}"\
+                        f"<pre class='code-fix'><code class=\"language-{html_mod.escape(entry['language'])}\">{html_mod.escape(entry['snippet'])}</code></pre></div>"
+                    )
+                code_section = '<section id="code-mapping" class="section"><h2>Code Mapping (Consolidated)</h2>' + ''.join(blocks) + '</section>'
             html_parts.append(code_section)
         # NOTE: Rebuilding trailing sections
         # (We assume earlier content up to recommendations already appended)
