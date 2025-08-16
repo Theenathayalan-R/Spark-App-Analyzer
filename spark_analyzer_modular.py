@@ -550,28 +550,50 @@ class Reporter:
             '<section id="pyspark-issues" class="section">',
             '<h2><i class="fab fa-python"></i> PySpark Code Issues</h2>',
             ("<div>No PySpark-specific issues detected.</div>" if not pyspark_issues else ""),
+            # Consolidated PySpark issues by pattern
             ''.join([
-                f'<div class="pyspark-issue severity-{issue.severity.lower()}">'\
-                f'<h4>[{issue.severity}] {issue.pattern.replace("_", " ").title()}</h4>'\
-                f'<p><strong>Problem:</strong> {issue.description}</p>'\
-                f'<p><strong>Impact:</strong> {issue.estimated_impact}</p>'\
-                f'<p><strong>Fix:</strong> {issue.recommendation}</p>'\
-                f'<div class="code-fix"><pre><code class="language-python">{issue.code_fix}</code></pre></div>'\
-                f'</div>'
-                for issue in pyspark_issues
-            ]),
+                (lambda issues_for_pattern: (
+                    f"<div class='pyspark-issue severity-{max(issues_for_pattern, key=lambda x: x.severity).severity.lower()}'>" +
+                    f"<h4>[{issues_for_pattern[0].pattern.replace('_',' ').title()}] Count: {len(issues_for_pattern)} | Max Sev: {max(i.severity for i in issues_for_pattern)} | Avg Sev: {sum(i.severity for i in issues_for_pattern)/len(issues_for_pattern):.2f}</h4>" +
+                    (lambda rep: (
+                        f"<p><strong>Example Problem:</strong> {html_mod.escape(rep.description)}</p>" +
+                        f"<p><strong>Example Impact:</strong> {html_mod.escape(rep.estimated_impact)}</p>" +
+                        f"<p><strong>Primary Recommendation:</strong> {html_mod.escape(rep.recommendation)}</p>" +
+                        (f"<div class='code-fix'><pre><code class='language-python'>{html_mod.escape(rep.code_fix)}</code></pre></div>" if getattr(rep,'code_fix',None) else '')
+                    ))(max(issues_for_pattern, key=lambda x: x.severity)) +
+                    ("<details><summary>Details</summary><ul>" + ''.join([
+                        f"<li>Sev {iss.severity} - {html_mod.escape(iss.description)} (Impact: {html_mod.escape(iss.estimated_impact)})</li>" for iss in issues_for_pattern
+                    ]) + "</ul></details>" if len(issues_for_pattern) > 1 else '') +
+                    "</div>"
+                ))(issues_group)
+                for _pattern, issues_group in (lambda grouped: grouped.items())(__import__('collections').OrderedDict(
+                    sorted((
+                        (p, lst) for p, lst in (lambda d: d)(__import__('collections').defaultdict(list, {
+                            **{issue.pattern: [] for issue in pyspark_issues}
+                        })).items()
+                    ), key=lambda x: x[0]
+                )) )
+            ]) if pyspark_issues else '',
             '</section>',
             '<section id="performance-issues" class="section">',
             '<h2><i class="fas fa-tachometer-alt"></i> Performance Issues</h2>',
             ("<div>No performance issues detected by advanced analysis.</div>" if not performance_issues else ""),
+            # Consolidated performance issues by category
             ''.join([
-                f'<div class="performance-issue">'\
-                f'<strong>[{issue.category.upper()}]</strong> {issue.impact}<br>'\
-                f'<em>Recommendation:</em> {issue.recommendation}<br>'\
-                f'<em>Severity:</em> {issue.severity:.2f} | <em>Affected Stages:</em> {", ".join(map(str, issue.affected_stages)) if issue.affected_stages else "N/A"}'\
-                f'</div>'
-                for issue in performance_issues
-            ]),
+                (lambda issues_for_cat: (
+                    f"<div class='performance-issue'>" +
+                    f"<strong>[{cat.upper()}]</strong> Count: {len(issues_for_cat)} | Max Sev: {max(i.severity for i in issues_for_cat):.2f} | Avg Sev: {sum(i.severity for i in issues_for_cat)/len(issues_for_cat):.2f} | Stages: " +
+                    (', '.join(map(str, sorted({s for i in issues_for_cat for s in (i.affected_stages or [])}))) or 'N/A') +
+                    (lambda rep: (
+                        f"<br>Example Impact: {html_mod.escape(rep.impact)}<br>Recommendation: {html_mod.escape(rep.recommendation)}"
+                    ))(max(issues_for_cat, key=lambda x: x.severity)) +
+                    ("<details><summary>Details</summary><ul>" + ''.join([
+                        f"<li>Sev {iss.severity:.2f} - {html_mod.escape(iss.impact)} (Stages: {', '.join(map(str, iss.affected_stages)) if iss.affected_stages else 'N/A'})</li>" for iss in issues_for_cat
+                    ]) + "</ul></details>" if len(issues_for_cat) > 1 else '') +
+                    "</div>"
+                ))(issues)
+                for cat, issues in sorted(cat_counts.items())
+            ]) if performance_issues else '',
             ('' if not category_summary_rows else '<h3>Category Summary</h3>'
              '<table class="issue-table"><tr><th>Category</th><th>Count</th><th>Max Severity</th><th>Affected Stages (Union)</th></tr>' +
              ''.join([
