@@ -550,30 +550,31 @@ class Reporter:
             '<section id="pyspark-issues" class="section">',
             '<h2><i class="fab fa-python"></i> PySpark Code Issues</h2>',
             ("<div>No PySpark-specific issues detected.</div>" if not pyspark_issues else ""),
-            # Consolidated PySpark issues by pattern
-            ''.join([
-                (lambda issues_for_pattern: (
-                    f"<div class='pyspark-issue severity-{max(issues_for_pattern, key=lambda x: x.severity).severity.lower()}'>" +
-                    f"<h4>[{issues_for_pattern[0].pattern.replace('_',' ').title()}] Count: {len(issues_for_pattern)} | Max Sev: {max(i.severity for i in issues_for_pattern)} | Avg Sev: {sum(i.severity for i in issues_for_pattern)/len(issues_for_pattern):.2f}</h4>" +
-                    (lambda rep: (
-                        f"<p><strong>Example Problem:</strong> {html_mod.escape(rep.description)}</p>" +
-                        f"<p><strong>Example Impact:</strong> {html_mod.escape(rep.estimated_impact)}</p>" +
-                        f"<p><strong>Primary Recommendation:</strong> {html_mod.escape(rep.recommendation)}</p>" +
-                        (f"<div class='code-fix'><pre><code class='language-python'>{html_mod.escape(rep.code_fix)}</code></pre></div>" if getattr(rep,'code_fix',None) else '')
-                    ))(max(issues_for_pattern, key=lambda x: x.severity)) +
-                    ("<details><summary>Details</summary><ul>" + ''.join([
-                        f"<li>Sev {iss.severity} - {html_mod.escape(iss.description)} (Impact: {html_mod.escape(iss.estimated_impact)})</li>" for iss in issues_for_pattern
-                    ]) + "</ul></details>" if len(issues_for_pattern) > 1 else '') +
-                    "</div>"
-                ))(issues_group)
-                for _pattern, issues_group in (lambda grouped: grouped.items())(__import__('collections').OrderedDict(
-                    sorted((
-                        (p, lst) for p, lst in (lambda d: d)(__import__('collections').defaultdict(list, {
-                            **{issue.pattern: [] for issue in pyspark_issues}
-                        })).items()
-                    ), key=lambda x: x[0]
-                )) )
-            ]) if pyspark_issues else '',
+            # Consolidated PySpark issues by pattern (simplified for reliability)
+            (lambda issues: (
+                '' if not issues else (
+                    (lambda groups: (
+                        ''.join([
+                            (lambda grp: (
+                                (lambda sev_map: [ (i.severity if isinstance(i.severity,(int,float)) else sev_map.get(str(i.severity).upper(),0.0)) for i in grp ])({'LOW':0.3,'MEDIUM':0.6,'HIGH':0.9})
+                            )(grp:=groups[p]) or (lambda sev_vals: (
+                                (lambda max_sev, avg_sev, rep: (
+                                    f"<div class='pyspark-issue severity-{str(getattr(rep,'severity','LOW')).lower()}'>" +
+                                    f"<h4>[{p.replace('_',' ').title()}] Count: {len(grp)} | Max Sev: {max_sev:.2f} | Avg Sev: {avg_sev:.2f}</h4>" +
+                                    f"<p><strong>Example Problem:</strong> {html_mod.escape(getattr(rep,'description',''))}</p>" +
+                                    f"<p><strong>Example Impact:</strong> {html_mod.escape(getattr(rep,'estimated_impact',''))}</p>" +
+                                    f"<p><strong>Primary Recommendation:</strong> {html_mod.escape(getattr(rep,'recommendation',''))}</p>" +
+                                    (f"<div class='code-fix'><pre><code class='language-python'>{html_mod.escape(getattr(rep,'code_fix',''))}</code></pre></div>" if getattr(rep,'code_fix',None) else '') +
+                                    ("<details><summary>Details</summary><ul>" + ''.join([
+                                        f"<li>Sev {html_mod.escape(str(getattr(i,'severity','')))} - {html_mod.escape(getattr(i,'description',''))} (Impact: {html_mod.escape(getattr(i,'estimated_impact',''))})</li>" for i in grp
+                                    ]) + "</ul></details>" if len(grp) > 1 else '') +
+                                    "</div>"
+                                ))(max(sev_vals), (sum(sev_vals)/len(sev_vals) if sev_vals else 0.0), grp[max(range(len(sev_vals)), key=lambda idx: sev_vals[idx])] if sev_vals else grp[0])
+                            ))([ (i.severity if isinstance(i.severity,(int,float)) else {'LOW':0.3,'MEDIUM':0.6,'HIGH':0.9}.get(str(i.severity).upper(),0.0)) for i in grp ])
+                        ) for p in sorted(groups.keys()) ] )
+                    ))( (lambda d: [d.setdefault(i.pattern, []).append(i) for i in issues] or d)({}) )
+                )
+            ))(pyspark_issues) if pyspark_issues else '',
             '</section>',
             '<section id="performance-issues" class="section">',
             '<h2><i class="fas fa-tachometer-alt"></i> Performance Issues</h2>',
