@@ -108,11 +108,21 @@ class EventParser:
             event_type = event.get('Event')
             
             if event_type == 'SparkListenerJobStart':
+                props = event.get('Properties', {}) or {}
+                # Expanded fallback chain for description extraction
+                description = (
+                    props.get('spark.job.description') or
+                    props.get('callSite.short') or
+                    props.get('callSite') or
+                    props.get('callSite.long') or
+                    props.get('Job Description') or
+                    'Unknown'
+                )
                 jobs.append({
                     'job_id': event.get('Job ID'),
                     'submission_time': event.get('Submission Time'),
                     'stage_ids': event.get('Stage IDs', []),
-                    'description': event.get('Properties', {}).get('callSite.short', 'Unknown'),
+                    'description': description,
                     'status': 'RUNNING',
                     'completion_time': None,
                     'duration': 0
@@ -241,6 +251,41 @@ class EventParser:
                         sql_map[exec_id]['duration'] = sql_map[exec_id]['end_time'] - sql_map[exec_id]['start_time']
         
         sql_operations = list(sql_map.values())
+        # Post-process unknown job descriptions with richer context
+        def _truncate(txt: str, n: int = 80) -> str:
+            return txt if len(txt) <= n else txt[:n-3] + '...'
+        # Build helper list for efficient overlap checks
+        sql_windows = []
+        for sql in sql_operations:
+            st = sql.get('start_time')
+            et = sql.get('end_time')
+            if st is not None and et is not None:
+                sql_windows.append((st, et, sql.get('execution_id'), sql.get('description', '')))
+        for job in jobs:
+            if job.get('description') == 'Unknown':
+                jst = job.get('submission_time')
+                jet = job.get('completion_time')
+                matched_sql = None
+                if jst is not None and jet is not None:
+                    for st, et, exec_id, desc in sql_windows:
+                        if st <= jet and et >= jst:  # overlap
+                            matched_sql = (exec_id, desc)
+                            break
+                if matched_sql:
+                    exec_id, desc = matched_sql
+                    job['description'] = f"SQL Exec {exec_id}: {_truncate(str(desc))}"
+                else:
+                    stage_ids = job.get('stage_ids') or []
+                    if stage_ids:
+                        # Gather first non-empty stage name
+                        names = [stages.get(sid, {}).get('stage_name', '') for sid in stage_ids]
+                        names = [n for n in names if n]
+                        if names:
+                            job['description'] = _truncate(f"Stages {stage_ids[:5]}: {names[0]}")
+                        else:
+                            job['description'] = f"Stages {stage_ids[:5]} (total {len(stage_ids)})"
+                    else:
+                        job['description'] = 'Spark Job'
         return {
             'jobs': jobs,
             'stages': stages,
@@ -321,6 +366,7 @@ class RecommendationEngine:
             'gc_overhead': ["--conf spark.executor.memory=8g", "--conf spark.memory.fraction=0.6"],
             'cpu_bottleneck': ["--conf spark.executor.cores=4", "--conf spark.dynamicAllocation.enabled=true"],
             'memory_bottleneck': ["--conf spark.memory.fraction=0.7", "--conf spark.storage.memoryFraction=0.4"],
+            'memory_pressure_model': ["--conf spark.memory.fraction=0.7", "--conf spark.sql.adaptive.enabled=true"]
         }
         return mapping.get(category, [])
 
@@ -342,12 +388,33 @@ class RecommendationEngine:
             baseline_added = True
 
         performance_issues = analysis.get('performance_issues', [])
+        # Group performance issues by category to aggregate similar bottlenecks
+        from collections import defaultdict
+        grouped = defaultdict(list)
         for issue in performance_issues:
-            base = f"[{issue.category.upper()}] {issue.impact}: {issue.recommendation}"
-            snippets = self._config_snippets(issue.category)
-            if snippets:
-                base += " | Config: " + ', '.join(snippets)
-            add(base, min(1.0, 0.5 + issue.severity/2))
+            grouped[issue.category].append(issue)
+        for category, issues in grouped.items():
+            if not issues:
+                continue
+            snippets = self._config_snippets(category)
+            if len(issues) == 1:
+                issue = issues[0]
+                base = f"[{issue.category.upper()}] {issue.impact}: {issue.recommendation}"
+                if snippets:
+                    base += " | Config: " + ', '.join(snippets)
+                add(base, min(1.0, 0.5 + issue.severity/2))
+            else:
+                sev_max = max(i.severity for i in issues)
+                # Union of affected stages
+                affected = sorted({s for i in issues for s in (i.affected_stages or [])})
+                rep = max(issues, key=lambda x: x.severity)
+                impacts_sample = rep.impact
+                rec_text = rep.recommendation
+                base = (f"[{category.upper()}-AGG] {len(issues)} occurrences across stages {affected or 'N/A'}. "
+                        f"Max severity {sev_max:.2f}. Example impact: {impacts_sample}. Recommendation: {rec_text}")
+                if snippets:
+                    base += " | Config: " + ', '.join(snippets)
+                add(base, min(1.0, 0.5 + sev_max/2))
             baseline_added = True
 
         if self.pyspark_analyzer and parsed_data:
@@ -363,6 +430,7 @@ class RecommendationEngine:
         if not baseline_added:
             add("[BASELINE] No major issues detected; review parallelism and shuffle configuration for incremental gains.", 0.2)
 
+        # De-duplicate and order
         dedup: Dict[str, float] = {}
         for r in recs_struct:
             if r['msg'] not in dedup or r['severity'] > dedup[r['msg']]:
@@ -379,6 +447,17 @@ class Reporter:
         bottlenecks = analysis.get('bottlenecks', [])
         failed_jobs = stats.get('failed_jobs', [])
         slow_jobs = stats.get('slow_jobs', [])
+        performance_issues = analysis.get('performance_issues', [])
+        # Build category aggregation
+        from collections import defaultdict
+        cat_counts = defaultdict(list)
+        for issue in performance_issues:
+            cat_counts[issue.category].append(issue)
+        category_summary_rows = []
+        for cat, issues in sorted(cat_counts.items()):
+            max_sev = max(i.severity for i in issues)
+            union_stages = sorted({s for i in issues for s in (i.affected_stages or [])})
+            category_summary_rows.append((cat, len(issues), max_sev, union_stages))
         # Helper to find related SQL query for a job
         def find_sql_for_job(job, sql_ops):
             # Match by time overlap if possible
@@ -427,8 +506,8 @@ class Reporter:
             '.nav-links a { color: #222; text-decoration: none; font-weight: 500; padding: 0.5rem 1rem; border-radius: 8px; transition: background 0.2s; }',
             '.nav-links a:hover { background: #e3eafc; }',
             '.container { max-width: 1200px; margin: 2rem auto; background: #fff; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); padding: 2rem; }',
-            '.summary-cards { display: flex; gap: 2rem; margin-bottom: 2rem; }',
-            '.summary-card { flex: 1; background: #f5f6fa; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.03); text-align: center; }',
+            '.summary-cards { display: flex; gap: 2rem; margin-bottom: 2rem; flex-wrap: wrap; }',
+            '.summary-card { flex: 1 1 180px; background: #f5f6fa; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 2px rgba(0,0,0,0.03); text-align: center; }',
             '.section { margin-bottom: 2.5rem; }',
             '.section h2 { margin-top: 0; }',
             '.bottleneck, .failed, .slow { background: #fff3cd; border-left: 4px solid #e67e22; margin: 1rem 0; padding: 1rem; border-radius: 6px; }',
@@ -439,9 +518,9 @@ class Reporter:
             '.severity-medium { border-left-color: #ff8800; background: #fff2e6; }',
             '.severity-low { border-left-color: #44aa44; background: #e6ffe6; }',
             '.code-fix { background: #f8f8f8; border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; font-family: "Fira Code", "Consolas", monospace; font-size: 13px; overflow-x: auto; }',
-            '.job-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }',
-            '.job-table th, .job-table td { border: 1px solid #eee; padding: 0.5rem 0.75rem; text-align: left; }',
-            '.job-table th { background: #f5f6fa; }',
+            '.job-table, .issue-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }',
+            '.job-table th, .job-table td, .issue-table th, .issue-table td { border: 1px solid #eee; padding: 0.5rem 0.75rem; text-align: left; }',
+            '.job-table th, .issue-table th { background: #f5f6fa; }',
             '.performance-issue { background: #fff9e6; border-left: 4px solid #ffa500; margin: 1rem 0; padding: 1rem; border-radius: 6px; }',
             '</style>',
             '</head><body>',
@@ -464,6 +543,7 @@ class Reporter:
             f'<div class="summary-card"><h3>Success Rate</h3><div>{stats.get("success_rate", 0):.1f}%</div></div>',
             f'<div class="summary-card"><h3>PySpark Issues</h3><div>{len(pyspark_issues)}</div></div>',
             f'<div class="summary-card"><h3>Performance Issues</h3><div>{len(analysis.get("performance_issues", []))}</div></div>',
+            f'<div class="summary-card"><h3>Issue Categories</h3><div>{len(cat_counts)}</div></div>',
             '</div></section>',
             
             '<section id="pyspark-issues" class="section">',
@@ -483,15 +563,21 @@ class Reporter:
             
             '<section id="performance-issues" class="section">',
             '<h2><i class="fas fa-tachometer-alt"></i> Performance Issues</h2>',
-            ("<div>No performance issues detected by advanced analysis.</div>" if not analysis.get('performance_issues') else ""),
+            ("<div>No performance issues detected by advanced analysis.</div>" if not performance_issues else ""),
             ''.join([
                 f'<div class="performance-issue">'
                 f'<strong>[{issue.category.upper()}]</strong> {issue.impact}<br>'
                 f'<em>Recommendation:</em> {issue.recommendation}<br>'
                 f'<em>Severity:</em> {issue.severity:.2f} | <em>Affected Stages:</em> {", ".join(map(str, issue.affected_stages)) if issue.affected_stages else "N/A"}'
                 f'</div>'
-                for issue in analysis.get('performance_issues', [])
+                for issue in performance_issues
             ]),
+            ('' if not category_summary_rows else '<h3>Category Summary</h3>'
+             '<table class="issue-table"><tr><th>Category</th><th>Count</th><th>Max Severity</th><th>Affected Stages (Union)</th></tr>' +
+             ''.join([
+                 f'<tr><td>{cat}</td><td>{cnt}</td><td>{sev:.2f}</td><td>{" ,".join(map(str, stages)) if stages else "-"}</td></tr>'
+                 for cat, cnt, sev, stages in category_summary_rows
+             ]) + '</table>'),
             '</section>',
             '<section id="bottlenecks" class="section">',
             '<h2>Bottleneck Jobs</h2>',
@@ -557,9 +643,46 @@ class Reporter:
         ])
         html_parts.append('</div></body></html>')
         html_content = ''.join(html_parts)
-        with open(output_file, "w") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(html_content)
         print(f"Report generated: {output_file}")
+
+# JSON serialization helper
+def build_json_summary(parsed: Dict[str, Any], analysis: Dict[str, Any], recommendations: List[str], code_mappings: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+    from collections import defaultdict
+    from datetime import datetime
+    perf_issues = analysis.get('performance_issues', [])
+    cat_groups = defaultdict(list)
+    for issue in perf_issues:
+        cat_groups[getattr(issue, 'category', 'unknown')].append(issue)
+    cat_summary = {}
+    for cat, issues in cat_groups.items():
+        cat_summary[cat] = {
+            'count': len(issues),
+            'max_severity': max(getattr(i, 'severity', 0.0) for i in issues),
+            'affected_stages_union': sorted({s for i in issues for s in (getattr(i, 'affected_stages', []) or [])})
+        }
+    def issue_to_dict(i):
+        return {
+            'category': getattr(i, 'category', ''),
+            'severity': getattr(i, 'severity', 0.0),
+            'impact': getattr(i, 'impact', ''),
+            'recommendation': getattr(i, 'recommendation', ''),
+            'affected_stages': getattr(i, 'affected_stages', []),
+            'metrics': getattr(i, 'metrics', {})
+        }
+    data = {
+        'generated_at': datetime.utcnow().isoformat() + 'Z',
+        'job_stats': analysis.get('job_stats', {}),
+        'performance_issues': [issue_to_dict(i) for i in perf_issues],
+        'issue_categories': cat_summary,
+        'recommendations': recommendations,
+        'code_mappings': code_mappings or [],
+        'job_count': len(parsed.get('jobs', [])),
+        'stage_count': len(parsed.get('stages', {})),
+        'sql_execution_count': len(parsed.get('sql_operations', [])),
+    }
+    return data
 
 # --- Main CLI ---
 def main(args):
@@ -589,6 +712,15 @@ def main(args):
             code_mappings = mapper.map_jobs_to_code(parsed.get('jobs', []), analysis.get('performance_issues', []))
         except Exception as e:  # pragma: no cover
             print(f"Warning: code mapping failed: {e}")
+    # JSON export (write before/independent of HTML)
+    if getattr(args, 'json', None):
+        try:
+            summary = build_json_summary(parsed, analysis, recommendations, code_mappings)
+            with open(args.json, 'w') as jf:
+                json.dump(summary, jf, indent=2)
+            print(f"JSON summary written: {args.json}")
+        except Exception as e:
+            print(f"Warning: failed to write JSON summary: {e}")
     # Report
     reporter = Reporter()
     reporter.generate(parsed, analysis, recommendations, output_file=args.report, code_mappings=code_mappings)
@@ -601,5 +733,6 @@ if __name__ == "__main__":
     parser.add_argument('--report', help='Output HTML report file', default='spark_analysis_report.html')
     parser.add_argument('--code-repo', help='Path to source code repository for mapping job call sites to code', default=None)
     parser.add_argument('--streaming', action='store_true', help='Enable streaming (incremental) parsing mode')
+    parser.add_argument('--json', help='Optional JSON summary output file', default=None)
     args = parser.parse_args()
     main(args)

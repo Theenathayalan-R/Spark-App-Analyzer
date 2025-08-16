@@ -50,6 +50,7 @@ Static / heuristic detection of:
 
 ### Reporting
 - Modern single HTML file (no external state) containing summary, issues, recommendations, job table, optional code mapping section.
+- Machine‑readable JSON summary export (`--json output.json`).
 
 ### Robustness
 - Generator-based log loading for large files
@@ -79,12 +80,14 @@ python spark_analyzer_modular.py <history_file_or_s3_app_id> \
   [--s3-config s3_config.json] \
   [--report out.html] \
   [--code-repo /path/to/source/root] \
+  [--json summary.json] \
   [--streaming]
 ```
 Arguments:
 - history_file: Path to Spark event log (plain text JSON per line)
 - --s3-config: Enable S3 retrieval (treat positional arg as app id/key)
 - --report: Output HTML filename (default: spark_analysis_report.html)
+- --json: Optional JSON summary output (schema below)
 - --code-repo: Root of repository for call‑site & annotation mapping
 - --streaming: Placeholder flag (future incremental aggregation); currently reads file once via generator
 
@@ -136,11 +139,48 @@ Reporter().generate(parsed, analysis, recs, output_file='my_report.html')
 - Summary metrics (jobs, avg duration, success rate, counts of issues)
 - PySpark code issues (severity color coded)
 - Performance issues (root cause categories with affected stages)
+- Category summary table (per issue category counts & max severity)
 - Bottleneck jobs
 - Failed jobs
 - Recommendations (severity‑scored, de‑duplicated, config hints)
 - Code Mapping (optional)
 - Complete job table (with overlapping SQL descriptions)
+
+### 8.1 JSON Summary Schema
+Produced when `--json <file>` is specified.
+
+Top-level structure:
+```jsonc
+{
+  "generated_at": "UTC timestamp",
+  "job_stats": {"total_jobs": int, "avg_duration": float, ...},
+  "performance_issues": [
+    {
+      "category": "data_skew|shuffle_spill|...",
+      "severity": 0.0-1.0,
+      "impact": "human readable impact",
+      "recommendation": "actionable guidance",
+      "affected_stages": [stage_ids],
+      "metrics": { "coefficient_of_variation": 0.73, ... }
+    }
+  ],
+  "issue_categories": {
+    "data_skew": {"count": 2, "max_severity": 0.91, "affected_stages_union": [3,5]},
+    "shuffle_spill": {"count": 1, "max_severity": 0.60, "affected_stages_union": [7] }
+  },
+  "recommendations": ["(sev=0.85) [DATA_SKEW-AGG] ..."],
+  "code_mappings": [
+    {"job_id": 12, "file": "etl/pipeline.py", "line": 120, "language": "python", "related_issue_categories": ["data_skew"], "snippet": "..."}
+  ],
+  "job_count": 15,
+  "stage_count": 42,
+  "sql_execution_count": 4
+}
+```
+Notes:
+- `metrics` object fields vary by category (e.g. skew: coefficient_of_variation; memory_pressure_model: spill_ratio, avg_gc_ratio; critical_path: path, path_duration_ms).
+- `recommendations` list already severity‑scored and aggregated.
+- `code_mappings` present only if `--code-repo` used and matches found.
 
 ## 9. Running Tests
 ```bash
@@ -169,9 +209,10 @@ Implemented (recent iteration):
 - Recommendation severity scoring & de‑duplication with config snippets
 - Code → log mapping with multi‑pattern regex + annotations
 - Robust malformed line handling & generator loading
+- JSON summary export (machine readable)
 
 Planned / Pending:
-- JSON export of analysis (machine readable) & CI exit codes
+- CI exit codes based on severity thresholds
 - Compressed log ingestion (.gz / .lz4)
 - Streaming incremental aggregation & eviction of per‑task detail
 - Executor timeline visualization with actual metrics (currently prototype dashboard)
